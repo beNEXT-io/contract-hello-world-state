@@ -48,8 +48,9 @@ async fn increment_counter() -> Result<(), Box<dyn std::error::Error>> {
         .update_item()
         .table_name(&table_name)
         .key("id", AttributeValue::S("state".to_string()))
-        .update_expression("SET counter = counter + :inc")
+        .update_expression("SET #c = #c + :inc")
         .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
+        .expression_attribute_names("#c", "counter")
         .return_values(ReturnValue::UpdatedNew)
         .send()
         .await;
