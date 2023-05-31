@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  hello-world-state
+
+  Sample SAM Template for hello-world-state
+
+Parameters:
+  ContractId:
+    Type: String
+    Description: The unique Contract ID - used for the table name and the API path part.
+    Default: helloworldstate-001
+    # IMPORTANT: The default ContractId ** MUST BE UNIQUE ** as it is the name used for the DynamoDB Table.
+    #            DynamoDB Tables need to be unique to an AWS accounts region.
+    #            SAM CLI will throw an exception if a DynamoDB Table already exists with the same name.
+
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS'"
+      AllowHeaders: "'content-type'"
+      AllowOrigin: "'*'"
+      # AllowCredentials: true  Uncomment only if you choose a specific origin instead of the * wildcard.
+
+Resources:
+  HelloWorldStateFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      CodeUri: ./rust_app
+      Handler: bootstrap
+      Runtime: provided.al2
+      Role: !GetAtt HelloWorldStateFunctionRole.Arn
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ContractId
+
+  HelloWorldStateFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoDBCrudPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchGetItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt HelloWorldStateTable.Arn
+            
+  ContractApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Ref ContractId
+  HelloWorldStateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ContractApi
+      ParentId: !GetAtt ContractApi.RootResourceId
+      PathPart: !Ref ContractId
+  HelloWorldStateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ContractApi
+      ResourceId: !Ref HelloWorldStateResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HelloWorldStateFunction.Arn}/invocations
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: ""
+        RequestTemplates:
+          application/json: |
+            {
+              "request" : $input.json('$.request')
+            }
+      MethodResponses:
+        - StatusCode: 200
+
+  HelloWorldStateFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt HelloWorldStateFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ContractApi}/*/*/*
+
+  HelloWorldStateDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: HelloWorldStateMethod
+    Properties:
+      RestApiId: !Ref ContractApi
+      Description: 'Deploy ContractApi'
+      StageName: Prod
+
+  HelloWorldStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref ContractId
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+Outputs:
+  HelloWorldStateApi:
+    Description: "API Gateway endpoint URL for Prod stage for Hello World State function"
+    Value: !Sub "https://${ContractApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/${ContractId}/"
+  HelloWorldStateFunction:
+    Description: "Hello World State Lambda Function ARN"
+    Value: !GetAtt HelloWorldStateFunction.Arn
+  HelloWorldStateFunctionIamRole:
+    Description: "Explicit IAM Role created for Hello World Statefunction"
+    Value: !GetAtt HelloWorldStateFunctionRole.Arn
+  HelloWorldStateTable:
+    Description: "Hello World State DynamoDB Table Name"
+    Value: !Ref HelloWorldStateTable
