@@ -12,6 +12,7 @@ chrono = "0.4.25"
 
 lambda_runtime = "0.8.0"
 serde = "1.0.136"
+thiserror = "1.0.40"
 tokio = { version = "1", features = ["macros"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

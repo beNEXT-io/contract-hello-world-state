@@ -4,10 +4,9 @@ use aws_sdk_dynamodb::{
 };
 use chrono::Utc;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use lib::org_accordproject_helloworldstate::*;
 use serde::{Deserialize, Serialize};
 use std::env;
-
-use lib::org_accordproject_helloworldstate::*;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub enum RequestType {
@@ -28,16 +27,24 @@ struct Request {
     request: RequestType,
 }
 
-async fn increment_counter(my_request: &MyRequest) -> Result<(), SdkError<UpdateItemError>> {
-    // Initialize the AWS SDK for Rust
+async fn increment_counter() -> Result<(), Box<dyn std::error::Error>> {
     let config = aws_config::load_from_env().await;
-    let table_name = env::var("TABLE_NAME").expect("TABLE_NAME must be set");
+
+    let table_name = match std::env::var("TABLE_NAME") {
+        Ok(name) => name,
+        Err(e) => {
+            println!(
+                "Error while retrieving TABLE_NAME environment variable: {:?}",
+                e
+            );
+            return Err(e.into());
+        }
+    };
+
     let dynamodb_client = Client::new(&config);
+    println!("Before update_item");
 
-    print!("Before update_item ");
-
-    // Retrieve and update the "counter" attribute
-    dynamodb_client
+    let result = dynamodb_client
         .update_item()
         .table_name(&table_name)
         .key("id", AttributeValue::S("state".to_string()))
@@ -45,12 +52,18 @@ async fn increment_counter(my_request: &MyRequest) -> Result<(), SdkError<Update
         .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
         .return_values(ReturnValue::UpdatedNew)
         .send()
-        .await?;
+        .await;
 
-    print!("After update_item ");
-
-    // If the previous line did not return an error, then the operation was successful
-    Ok(())
+    match result {
+        Ok(_) => {
+            println!("After update_item");
+            Ok(())
+        }
+        Err(e) => {
+            println!("Error during update_item: {:?}", e);
+            Err(e.into())
+        }
+    }
 }
 
 async fn handle_my_request(
@@ -69,7 +82,7 @@ async fn handle_my_request(
         .send()
         .await;
 
-    match increment_counter(&my_request).await {
+    match increment_counter().await {
         Ok(()) => println!("Success!"),
         Err(err) => println!("Failed to increment counter: {}", err),
     }
