@@ -38,19 +38,16 @@ struct Request {
     request: RequestType,
 }
 
-async fn increment_counter() -> Result<(), Box<dyn std::error::Error>> {
+async fn increment_counter() -> Result<i64, Box<dyn std::error::Error>> {
     let config = aws_config::load_from_env().await;
 
-    let table_name = match std::env::var("TABLE_NAME") {
-        Ok(name) => name,
-        Err(e) => {
-            println!(
-                "Error while retrieving TABLE_NAME environment variable: {:?}",
-                e
-            );
-            return Err(e.into());
-        }
-    };
+    let table_name = std::env::var("TABLE_NAME").map_err(|e| {
+        println!(
+            "Error while retrieving TABLE_NAME environment variable: {:?}",
+            e
+        );
+        Box::<dyn std::error::Error>::from(format!("{:?}", e))
+    })?;
 
     let dynamodb_client = Client::new(&config);
     println!("Before update_item");
@@ -64,18 +61,24 @@ async fn increment_counter() -> Result<(), Box<dyn std::error::Error>> {
         .expression_attribute_names("#c", "counter")
         .return_values(ReturnValue::UpdatedNew)
         .send()
-        .await;
-
-    match result {
-        Ok(_) => {
-            println!("After update_item");
-            Ok(())
-        }
-        Err(e) => {
+        .await
+        .map_err(|e| {
             println!("Error during update_item: {:?}", e);
-            Err(e.into())
-        }
-    }
+            Box::<dyn std::error::Error>::from(format!("{:?}", e))
+        })?;
+
+    println!("After update_item");
+
+    let attributes = result.attributes.ok_or("No attributes returned")?;
+    let new_counter = match attributes.get("counter") {
+        Some(av) => match av {
+            AttributeValue::N(s) => s.parse::<i64>().unwrap_or_default(),
+            _ => return Err("counter is not a number".into()),
+        },
+        None => return Err("counter attribute missing".into()),
+    };
+
+    Ok(new_counter)
 }
 
 async fn handle_my_request(
@@ -94,10 +97,13 @@ async fn handle_my_request(
         .send()
         .await;
 
-    match increment_counter().await {
-        Ok(()) => println!("Success!"),
-        Err(err) => println!("Failed to increment counter: {}", err),
-    }
+    let counter = match increment_counter().await {
+        Ok(counter) => counter,
+        Err(err) => {
+            println!("Failed to increment counter: {}", err);
+            return Err(err);
+        }
+    };
 
     match result {
         Ok(get_item_output) => {
@@ -106,7 +112,10 @@ async fn handle_my_request(
                 if let Some(AttributeValue::S(name)) = item.get("name") {
                     return Ok(MyResponse {
                         _class: my_request._class,
-                        output: format!("Hello {} - {}", name, my_request.input),
+                        output: format!(
+                            "Hello {} - {} - counter: {}",
+                            name, my_request.input, counter
+                        ),
                         _timestamp: Utc::now(),
                     });
                 }
