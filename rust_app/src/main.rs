@@ -12,12 +12,14 @@
  * limitations under the License.
  */
 
-use aws_sdk_dynamodb::{types::AttributeValue, types::ReturnValue, Client};
+use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::Utc;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use lib::org_accordproject_helloworldstate::*;
 use serde::{Deserialize, Serialize};
-use std::env;
+use utils::{add_data_to_database, add_state_to_database, get_data, increment_counter};
+
+mod utils;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub enum RequestType {
@@ -38,65 +40,17 @@ struct Request {
     request: RequestType,
 }
 
-async fn increment_counter() -> Result<i64, Box<dyn std::error::Error>> {
-    let config = aws_config::load_from_env().await;
-
-    let table_name = std::env::var("TABLE_NAME").map_err(|e| {
-        println!(
-            "Error while retrieving TABLE_NAME environment variable: {:?}",
-            e
-        );
-        Box::<dyn std::error::Error>::from(format!("{:?}", e))
-    })?;
-
-    let dynamodb_client = Client::new(&config);
-    println!("Before update_item");
-
-    let result = dynamodb_client
-        .update_item()
-        .table_name(&table_name)
-        .key("id", AttributeValue::S("state".to_string()))
-        .update_expression("SET #c = #c + :inc")
-        .expression_attribute_values(":inc", AttributeValue::N("1".to_string()))
-        .expression_attribute_names("#c", "counter")
-        .return_values(ReturnValue::UpdatedNew)
-        .send()
-        .await
-        .map_err(|e| {
-            println!("Error during update_item: {:?}", e);
-            Box::<dyn std::error::Error>::from(format!("{:?}", e))
-        })?;
-
-    println!("After update_item");
-
-    let attributes = result.attributes.ok_or("No attributes returned")?;
-    let new_counter = match attributes.get("counter") {
-        Some(av) => match av {
-            AttributeValue::N(s) => s.parse::<i64>().unwrap_or_default(),
-            _ => return Err("counter is not a number".into()),
-        },
-        None => return Err("counter attribute missing".into()),
-    };
-
-    Ok(new_counter)
-}
-
+//
+// Clause Function
+//
+// Function to handle the `MyRequest` clause
+//
 async fn handle_my_request(
     my_request: MyRequest,
 ) -> Result<MyResponse, Box<dyn std::error::Error>> {
-    // Initialize the AWS SDK for Rust
-    let config = aws_config::load_from_env().await;
-    let table_name = env::var("TABLE_NAME").expect("TABLE_NAME must be set");
-    let dynamodb_client = Client::new(&config);
-
-    // Query the DynamoDB table for the "data" item
-    let result = dynamodb_client
-        .get_item()
-        .table_name(table_name)
-        .key("id", AttributeValue::S("data".to_string()))
-        .send()
-        .await;
-
+    //
+    // Increment the `{state}` counter held in DynamoDB.
+    //
     let counter = match increment_counter().await {
         Ok(counter) => counter,
         Err(err) => {
@@ -105,23 +59,30 @@ async fn handle_my_request(
         }
     };
 
+    //
+    // Get the `{data}` from DynamoDB
+    //
+    let result = get_data("data").await;
+
+    //
+    // Generate the response depending on the result of the DynamoDB query
+    //
     match result {
-        Ok(get_item_output) => {
+        Ok(Some(item)) => {
             // Extract the item from the response, if present
-            if let Some(item) = get_item_output.item {
-                if let Some(AttributeValue::S(name)) = item.get("name") {
-                    return Ok(MyResponse {
-                        _class: my_request._class,
-                        output: format!(
-                            "Hello {} - {} - counter: {}",
-                            name, my_request.input, counter
-                        ),
-                        _timestamp: Utc::now(),
-                    });
-                }
+            if let Some(AttributeValue::S(name)) = item.get("name") {
+                return Ok(MyResponse {
+                    _class: my_request._class,
+                    output: format!(
+                        "Hello {} - {} - counter: {}",
+                        name, my_request.input, counter
+                    ),
+                    _timestamp: Utc::now(),
+                });
             }
             Err("Item not found or 'name' field missing".into())
         }
+        Ok(None) => Err("Item not found".into()),
         Err(error) => {
             println!("Error: {:?}", error);
             Err(format!("AWS SDK error: {:?}", error).into())
@@ -129,62 +90,21 @@ async fn handle_my_request(
     }
 }
 
-async fn handle_hello_world_clause(
+//
+// Constructor
+//
+// The constructor takes in the `{data}` payload and populates the DynamoDB database.
+// The constructor also initiates the `{state}` of the agreement.
+//
+async fn new(
     hello_world_clause: HelloWorldClause,
-) -> Result<
-    HelloWorldClause,
-    aws_sdk_dynamodb::error::SdkError<aws_sdk_dynamodb::operation::put_item::PutItemError>,
-> {
-    // Initialize the AWS SDK for Rust
-    let config = aws_config::load_from_env().await;
-    let table_name = env::var("TABLE_NAME").expect("TABLE_NAME must be set");
-    let dynamodb_client = Client::new(&config);
-
-    // First add the "data" to the database.
-    dynamodb_client
-        .put_item()
-        .table_name(&table_name)
-        .item("id", AttributeValue::S("data".to_string()))
-        .item(
-            "_identifier",
-            AttributeValue::S(hello_world_clause._identifier.clone()),
-        )
-        .item(
-            "clause_id",
-            AttributeValue::S(hello_world_clause.clause_id.clone()),
-        )
-        .item(
-            "_class",
-            AttributeValue::S(hello_world_clause._class.clone()),
-        )
-        .item("name", AttributeValue::S(hello_world_clause.name.clone()))
-        .send()
-        .await?;
-
-    println!("Successfully saved 'data' to DynamoDB: _class: {}, clause_id: {}, _identifier: {}, name: {}", hello_world_clause._class, hello_world_clause.clause_id, hello_world_clause._identifier, hello_world_clause.name);
-
-    // Second add the "state" to the database.
-    // Note: In a production grade system, introduce transaction processing.
-    dynamodb_client
-        .put_item()
-        .table_name(&table_name)
-        .item("id", AttributeValue::S("state".to_string()))
-        .item(
-            "_identifier",
-            AttributeValue::S(hello_world_clause._identifier.clone()),
-        )
-        .item("counter", AttributeValue::N("0".to_string()))
-        .item(
-            "_class",
-            AttributeValue::S(hello_world_clause._class.clone()),
-        )
-        .send()
-        .await?;
-
-    println!(
-        "Successfully saved state to DynamoDB: _class: {}, _identifier: {}, counter: 0",
-        hello_world_clause._class, hello_world_clause._identifier
-    );
+) -> Result<HelloWorldClause, Box<dyn std::error::Error>> {
+    add_data_to_database(&hello_world_clause)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    add_state_to_database(&hello_world_clause)
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     Ok(HelloWorldClause {
         _class: hello_world_clause._class,
@@ -194,19 +114,24 @@ async fn handle_hello_world_clause(
     })
 }
 
+//
+// Main Function Handler
+//
+// This is the function that handles all incoming requests and determines which clause function to call.
+//
 async fn function_handler(event: LambdaEvent<Request>) -> Result<ResponseType, Error> {
     let response = match event.payload.request {
-        RequestType::MyRequest(my_request) => match handle_my_request(my_request).await {
-            Ok(my_response) => ResponseType::MyResponse(my_response),
-            Err(error) => return Err(lambda_runtime::Error::from(format!("Error: {:?}", error))),
-        },
+        RequestType::MyRequest(my_request) => {
+            let my_response = handle_my_request(my_request)
+                .await
+                .map_err(|e| lambda_runtime::Error::from(format!("Error: {:?}", e)))?;
+            ResponseType::MyResponse(my_response)
+        }
         RequestType::HelloWorldClause(hello_world_clause) => {
-            match handle_hello_world_clause(hello_world_clause).await {
-                Ok(hello_world_clause) => ResponseType::HelloWorldClause(hello_world_clause),
-                Err(error) => {
-                    return Err(lambda_runtime::Error::from(format!("Error: {:?}", error)))
-                }
-            }
+            let clause = new(hello_world_clause)
+                .await
+                .map_err(|e| lambda_runtime::Error::from(format!("Error: {:?}", e)))?;
+            ResponseType::HelloWorldClause(clause)
         }
     };
 
