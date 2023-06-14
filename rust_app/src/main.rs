@@ -91,14 +91,16 @@ async fn generate_agreement_as_pdf(
 
             let data = Value::Object(data_map);
 
+            let template = env::var("TEMPLATE_NAME").expect("TEMPLATE_NAME must be set");
+
             let body = json!({
                 "data": data,
                 "notifyTo": request.notify_to.to_string(),
-                "template":"hello-world-state@0.15.0.cta",
+                "template": template,
                 "options": json!({})
             });
 
-            let request_url = "https://c4bd1g5tgg.execute-api.ap-southeast-2.amazonaws.com/dev/templates/generate-agreement";
+            let request_url = env::var("GENERATE_AGREEMENT_URL").expect("GENERATE_AGREEMENT_URL must be set");
 
             let response = Client::new()
             .post(request_url)
