@@ -40,6 +40,8 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref ContractId
+          GENERATE_AGREEMENT_URL: https://c4bd1g5tgg.execute-api.ap-southeast-2.amazonaws.com/dev/templates/generate-agreement
+          TEMPLATE_NAME: hello-world-state@0.15.0.cta
 
   HelloWorldStateFunctionRole:
     Type: AWS::IAM::Role

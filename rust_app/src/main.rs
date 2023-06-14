@@ -17,14 +17,31 @@ use chrono::Utc;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use lib::org_accordproject_helloworldstate::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use serde_json::json;
+use reqwest::Client;
+
 use utils::{add_data_to_database, add_state_to_database, get_data, increment_counter};
 
 mod utils;
+
+
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct GenerateAgreementAsPDFRequest {
+    notify_to: String
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct GenerateAgreementAsPDFResponse {
+    message: String
+}
 
 #[derive(Deserialize, Serialize, Debug)]
 pub enum RequestType {
     MyRequest(MyRequest),
     HelloWorldClause(HelloWorldClause),
+    GenerateAgreementAsPDFRequest(GenerateAgreementAsPDFRequest)
     // Add other request types here
 }
 
@@ -32,12 +49,77 @@ pub enum RequestType {
 pub enum ResponseType {
     MyResponse(MyResponse),
     HelloWorldClause(HelloWorldClause),
+    GenerateAgreementAsPDFResponse(GenerateAgreementAsPDFResponse)
     // Add other response types here
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 struct Request {
     request: RequestType,
+}
+
+async fn generate_agreement_as_pdf(
+    request: GenerateAgreementAsPDFRequest,
+) -> Result<GenerateAgreementAsPDFResponse, Box<dyn std::error::Error>> {
+    //
+    // Get the `{data}` from DynamoDB
+    //
+    let result = get_data("data").await;
+
+    //
+    // Generate the response depending on the result of the DynamoDB query
+    //
+    match result {
+        Ok(Some(item)) => {
+            let mut data_map = Map::new();
+            // Extract the item from the response, if present
+            if let Some(AttributeValue::S(name)) = item.get("name") {
+                data_map.insert("name".to_string(), Value::String(name.to_string()));
+            }
+
+            if let Some(AttributeValue::S(class)) = item.get("_class") {
+                data_map.insert("$class".to_string(), Value::String(class.to_string()));
+            }
+
+            if let Some(AttributeValue::S(clause_id)) = item.get("clause_id") {
+                data_map.insert("clauseId".to_string(), Value::String(clause_id.to_string()));
+            }
+
+            if let Some(AttributeValue::S(identifier)) = item.get("_identifier") {
+                data_map.insert("$identifier".to_string(), Value::String(identifier.to_string()));
+            }
+
+            let data = Value::Object(data_map);
+
+            let template = env::var("TEMPLATE_NAME").expect("TEMPLATE_NAME must be set");
+
+            let body = json!({
+                "data": data,
+                "notifyTo": request.notify_to.to_string(),
+                "template": template,
+                "options": json!({})
+            });
+
+            let request_url = env::var("GENERATE_AGREEMENT_URL").expect("GENERATE_AGREEMENT_URL must be set");
+
+            let response = Client::new()
+            .post(request_url)
+            .json(&body)
+            .send().await?;
+
+            return Ok(GenerateAgreementAsPDFResponse {
+                message: format!(
+                    "Agreement has been sent to {}",
+                    request.notify_to.to_string()
+                ).into()
+            });
+        }
+        Ok(None) => Err("Contract is not initialized".into()),
+        Err(error) => {
+            println!("Error: {:?}", error);
+            Err(format!("AWS SDK error: {:?}", error).into())
+        }
+    }
 }
 
 //
@@ -132,6 +214,13 @@ async fn function_handler(event: LambdaEvent<Request>) -> Result<ResponseType, E
                 .await
                 .map_err(|e| lambda_runtime::Error::from(format!("Error: {:?}", e)))?;
             ResponseType::HelloWorldClause(clause)
+        }
+
+        RequestType::GenerateAgreementAsPDFRequest(request) => {
+            let response = generate_agreement_as_pdf(request)
+                .await
+                .map_err(|e| lambda_runtime::Error::from(format!("Error: {:?}", e)))?;
+            ResponseType::GenerateAgreementAsPDFResponse(response)
         }
     };
 
