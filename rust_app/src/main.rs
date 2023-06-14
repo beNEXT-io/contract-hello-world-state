@@ -22,6 +22,7 @@ use serde_json::json;
 use reqwest::Client;
 
 use utils::{add_data_to_database, add_state_to_database, get_data, increment_counter};
+use std::{ env};
 
 mod utils;
 
