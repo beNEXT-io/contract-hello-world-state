@@ -16,42 +16,38 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use chrono::Utc;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use lib::org_accordproject_helloworldstate::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-use serde_json::json;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use serde_json::{Map, Value};
 
+use std::env;
 use utils::{add_data_to_database, add_state_to_database, get_data, increment_counter};
-use std::{ env};
 
 mod utils;
 
-
-
 #[derive(Deserialize, Serialize, Debug)]
 pub struct GenerateAgreementAsPDFRequest {
-    notify_to: String
+    notify_to: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct GenerateAgreementAsPDFResponse {
-    message: String
+    message: String,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub enum RequestType {
     MyRequest(MyRequest),
     HelloWorldClause(HelloWorldClause),
-    GenerateAgreementAsPDFRequest(GenerateAgreementAsPDFRequest)
-    // Add other request types here
+    GenerateAgreementAsPDFRequest(GenerateAgreementAsPDFRequest), // Add other request types here
 }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub enum ResponseType {
     MyResponse(MyResponse),
     HelloWorldClause(HelloWorldClause),
-    GenerateAgreementAsPDFResponse(GenerateAgreementAsPDFResponse)
-    // Add other response types here
+    GenerateAgreementAsPDFResponse(GenerateAgreementAsPDFResponse), // Add other response types here
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -73,7 +69,6 @@ async fn generate_agreement_as_pdf(
     match result {
         Ok(Some(item)) => {
             let mut data_map = Map::new();
-            // Extract the item from the response, if present
             if let Some(AttributeValue::S(name)) = item.get("name") {
                 data_map.insert("name".to_string(), Value::String(name.to_string()));
             }
@@ -87,12 +82,17 @@ async fn generate_agreement_as_pdf(
             }
 
             if let Some(AttributeValue::S(identifier)) = item.get("_identifier") {
-                data_map.insert("$identifier".to_string(), Value::String(identifier.to_string()));
+                data_map.insert(
+                    "$identifier".to_string(),
+                    Value::String(identifier.to_string()),
+                );
             }
 
             let data = Value::Object(data_map);
+            println!("data: {:?}", data);
 
             let template = env::var("TEMPLATE_NAME").expect("TEMPLATE_NAME must be set");
+            println!("template: {:?}", template);
 
             let body = json!({
                 "data": data,
@@ -100,25 +100,29 @@ async fn generate_agreement_as_pdf(
                 "template": template,
                 "options": json!({})
             });
+            println!("body: {:?}", body);
 
-            let request_url = env::var("GENERATE_AGREEMENT_URL").expect("GENERATE_AGREEMENT_URL must be set");
+            let request_url =
+                env::var("GENERATE_AGREEMENT_URL").expect("GENERATE_AGREEMENT_URL must be set");
+            println!("request_url: {:?}", request_url);
 
-            let response = Client::new()
-            .post(request_url)
-            .json(&body)
-            .send().await?;
+            let response = Client::new().post(request_url).json(&body).send().await?;
+            println!("response: {:?}", response);
 
-            return Ok(GenerateAgreementAsPDFResponse {
-                message: format!(
-                    "Agreement has been sent to {}",
-                    request.notify_to.to_string()
-                ).into()
-            });
+            Ok(GenerateAgreementAsPDFResponse {
+                message: format!("Agreement has been sent to {}", request.notify_to),
+            })
         }
-        Ok(None) => Err("Contract is not initialized".into()),
+        Ok(None) => Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Contract is not initialized",
+        ))),
         Err(error) => {
             println!("Error: {:?}", error);
-            Err(format!("AWS SDK error: {:?}", error).into())
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("AWS SDK error: {:?}", error),
+            )))
         }
     }
 }
