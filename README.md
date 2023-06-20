@@ -1,4 +1,4 @@
-# contract-hello-world-state
+# contract-hello-world-state.
 
 This project contains source code and supporting files for an Accord Project Smart Legal Contract app developed as a serverless application. 
 
