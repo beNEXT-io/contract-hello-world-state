@@ -62,6 +62,7 @@ async fn generate_agreement_as_pdf(
     // Get the `{data}` from DynamoDB
     //
     let result = get_data("data").await;
+    println!("result: {:?}", result);
 
     //
     // Generate the response depending on the result of the DynamoDB query
